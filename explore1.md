@@ -2,6 +2,13 @@ TCGA tests
 ================
 
 ``` r
+library(devtools)
+```
+
+    ## Loading required package: usethis
+
+``` r
+# get clinical data 
 library(TCGAbiolinks)
 library(janitor)
 ```
@@ -171,14 +178,13 @@ library("clusterProfiler")
 
     ## 
 
-    ## clusterProfiler v4.14.4 Learn more at https://yulab-smu.top/contribution-knowledge-mining/
+    ## clusterProfiler v4.14.6 Learn more at https://yulab-smu.top/contribution-knowledge-mining/
     ## 
     ## Please cite:
     ## 
-    ## Guangchuang Yu, Li-Gen Wang, Yanyan Han and Qing-Yu He.
-    ## clusterProfiler: an R package for comparing biological themes among
-    ## gene clusters. OMICS: A Journal of Integrative Biology. 2012,
-    ## 16(5):284-287
+    ## S Xu, E Hu, Y Cai, Z Xie, X Luo, L Zhan, W Tang, Q Wang, B Liu, R Wang,
+    ## W Xie, T Wu, L Xie, G Yu. Using clusterProfiler to characterize
+    ## multiomics data. Nature Protocols. 2024, 19(11):3292-3320
 
     ## 
     ## Attaching package: 'clusterProfiler'
@@ -226,7 +232,13 @@ library(ComplexHeatmap)
     ##   suppressPackageStartupMessages(library(ComplexHeatmap))
     ## ========================================
 
-# PCA of TCGA data
+``` r
+library(maftools)
+library(httpgd)
+library(survival)
+```
+
+# PCA of TCGA expression data
 
 This follows pretty much the blog post from
 [Chatomics1](https://divingintogeneticsandgenomics.com/post/pca-tcga/)
@@ -638,6 +650,13 @@ marker or our PC is not separating them perfectly.
 
 # SNV comparison
 
+As mentioned earlier :
+
+> LUAD originates in the alveolar epithelial cells and is often
+> associated with EGFR mutations, particularly in non-smokers
+
+Lets have a look first at this marker
+
 ``` r
 # This one should only be done once and the rds file been kept
 # Therefore it is excluded from the report generation
@@ -666,4 +685,607 @@ TCGA_LUAD_snv_data <- GDCprepare(LUAD_query_snv)
 saveRDS(TCGA_LUAD_snv_data, "./data/TCGA_LUAD_SNV_SummarizedExperiment.rds")
 ```
 
-to be continued….
+``` r
+maf <- getMC3MAF()
+```
+
+``` r
+LUAD__snv_data<- readRDS("./data/TCGA_LUAD_SNV_SummarizedExperiment.rds")
+LUSC__snv_data<- readRDS("./data/TCGA_LUSC_SNV_SummarizedExperiment.rds")
+# save the raw counts matrix 
+```
+
+# Survival modelling
+
+For this part, I am switching to this nice
+[tutorial](https://ocbe-uio.github.io/survomics/survomics.html) which
+has been published alongside this nice review [Tutorial on survival
+modeling with applications to omics
+data](https://academic.oup.com/bioinformatics/article/40/3/btae132/7623091).
+
+Essentially we are still remaining with the same cancer types but will
+now add the survival data. Unfortunately, I am running immmediately here
+into some known
+[issues](https://github.com/BioinformaticsFMRP/TCGAbiolinks/issues/639).
+Therefore, currently a need to install devtools and directly from the
+git-repository….
+
+``` r
+# taken from here https://stackoverflow.com/questions/24519794/r-max-function-ignore-na
+my.max <- function(x) ifelse( !all(is.na(x)), max(x, na.rm=T), NA)
+cancer_types <- c("TCGA-LUAD","TCGA-LUSC")
+
+clin <- NULL
+tmp  <- TCGAbiolinks::GDCquery_clinic(project = "TCGA-LUSC", type = "clinical")
+tmp2 <-TCGAbiolinks::GDCquery_clinic(project = "TCGA-LUAD", type = "clinical")
+clin <- rbind(clin, tmp[, c(
+        "project", "submitter_id", "vital_status",
+        "days_to_last_follow_up", "days_to_death",
+        "age_at_diagnosis", "gender", "race",
+        "ethnicity", "ajcc_pathologic_t"
+)])
+
+clin <- rbind(clin, tmp2[, c(
+        "project", "submitter_id", "vital_status",
+        "days_to_last_follow_up", "days_to_death",
+        "age_at_diagnosis", "gender", "race",
+        "ethnicity", "ajcc_pathologic_t"
+)])
+```
+
+so now we have for the 2 Lung cancer the following clinical data
+imported : project, submitter_id, vital_status, days_to_last_follow_up,
+days_to_death, age_at_diagnosis, gender, race, ethnicity,
+ajcc_pathologic_t Next we want to get the days to death and days to the
+last follow up, lets have a look how many complete, missing and type of
+information we have For - time to death: 63.3608815 are `NA` and
+missing - time to last follow up: 99.9081726 are `NA` and missing
+
+Next we are converting the resulting times into years instead of days,
+same as well for the age at diagnosis. Then we use the maximum of both
+values as the endpoint.
+
+``` r
+# convert into years
+# I got confused because I had many inf values. Turns out that the standard max function returns
+# inf if both values are actually "NA" --> which I do not like :)
+clin$time <- apply(clin[,c("days_to_death", "days_to_last_follow_up")],1,my.max)/365
+clin$age_at_diagnosis<-clin$age_at_diagnosis/365
+clin <- clin[, c("project", "submitter_id", "vital_status", "time", "gender", "age_at_diagnosis", "race", "ethnicity")]
+
+ggplot(clin, aes(x=age_at_diagnosis, fill=gender)) + geom_histogram() + ggtitle("Age at diagnosis") + facet_wrap(~project)
+```
+
+    ## `stat_bin()` using `bins = 30`. Pick better value with `binwidth`.
+
+    ## Warning: Removed 120 rows containing non-finite outside the scale range
+    ## (`stat_bin()`).
+
+![](explore1_files/figure-gfm/unnamed-chunk-25-1.png)<!-- -->
+
+``` r
+ggplot(clin, aes(x=time, fill=gender)) + geom_histogram() + ggtitle("survival time") + facet_wrap(~project)
+```
+
+    ## `stat_bin()` using `bins = 30`. Pick better value with `binwidth`.
+
+    ## Warning: Removed 689 rows containing non-finite outside the scale range
+    ## (`stat_bin()`).
+
+![](explore1_files/figure-gfm/unnamed-chunk-25-2.png)<!-- -->
+
+``` r
+# extract patients with positive overall survival time
+clin <- clin[(!is.na(clin$time )) & (clin$vital_status %in% c("Alive", "Dead")), ]
+```
+
+Now we only extracted patients with positive overall surivival time and
+have in total 400 observations.
+
+``` r
+table1 <- clin %>%
+  dplyr::count(vital_status, gender,project, ethnicity) %>%
+  group_by(vital_status) %>%
+  mutate(prop = prop.table(n))
+print(table1)
+```
+
+    ## # A tibble: 16 × 6
+    ## # Groups:   vital_status [2]
+    ##    vital_status gender project   ethnicity                  n    prop
+    ##    <chr>        <chr>  <chr>     <chr>                  <int>   <dbl>
+    ##  1 Alive        male   TCGA-LUSC not reported               1 1      
+    ##  2 Dead         female TCGA-LUAD Unknown                    4 0.0100 
+    ##  3 Dead         female TCGA-LUAD hispanic or latino         1 0.00251
+    ##  4 Dead         female TCGA-LUAD not hispanic or latino    69 0.173  
+    ##  5 Dead         female TCGA-LUAD not reported              22 0.0551 
+    ##  6 Dead         female TCGA-LUSC hispanic or latino         1 0.00251
+    ##  7 Dead         female TCGA-LUSC not hispanic or latino    29 0.0727 
+    ##  8 Dead         female TCGA-LUSC not reported              20 0.0501 
+    ##  9 Dead         male   TCGA-LUAD Unknown                    4 0.0100 
+    ## 10 Dead         male   TCGA-LUAD hispanic or latino         2 0.00501
+    ## 11 Dead         male   TCGA-LUAD not hispanic or latino    58 0.145  
+    ## 12 Dead         male   TCGA-LUAD not reported              24 0.0602 
+    ## 13 Dead         male   TCGA-LUSC Unknown                    1 0.00251
+    ## 14 Dead         male   TCGA-LUSC hispanic or latino         5 0.0125 
+    ## 15 Dead         male   TCGA-LUSC not hispanic or latino    96 0.241  
+    ## 16 Dead         male   TCGA-LUSC not reported              63 0.158
+
+``` r
+ggplot(clin, aes(x=time, fill=vital_status)) + geom_histogram() + ggtitle("survival time") + facet_wrap(~project)
+```
+
+    ## `stat_bin()` using `bins = 30`. Pick better value with `binwidth`.
+
+![](explore1_files/figure-gfm/unnamed-chunk-26-1.png)<!-- --> I think
+the histogram is much better suited for the visualization than the
+lollipop they show ![image in their
+repo](https://ocbe-uio.github.io/survomics/fig/TCGA_survival.png)
+
+Now we take our perviously normalized RNAseq data and do survival
+analysis using as well the clinical/demographic variables.
+
+### LUSC
+
+I added to the typical values as well “\$tobacco_smoking_status” to
+inform us about the most likely source of lung cancer.
+
+``` r
+# we are reusing the followng elements again
+#TCGA_lung_meta
+#combined_mat_cpm
+#rownames(TCGA_lung_meta) <- colnames(combined_mat_cpm)
+
+meta_LUSC <- colData(TCGA_LUSC_data)[,c("project_id", "submitter_id", "age_at_diagnosis", 
+        "ethnicity", "gender", "days_to_death", 
+        "days_to_last_follow_up", "vital_status","treatments","tobacco_smoking_status","paper_T.stage")]
+
+# now we only differentiate if/or not treatment
+meta_LUSC$treatments <- unlist(lapply(meta_LUSC$treatments, function(y) {
+  any(y$treatment_or_therapy == "yes")
+}))
+
+smoker = c("Current Reformed Smoker for < or = 15 yrs","Current Smoker","Current Reformed Smoker, Duration Not Specified")
+no_smoker = c("Lifelong Non-Smoker","Current Reformed Smoker for > 15 yrs")
+
+# same for smoker
+meta_LUSC$tobacco_smoking_status[meta_LUSC$tobacco_smoking_status=="Unknown" | meta_LUSC$tobacco_smoking_status=="Not Reported"] <- NA
+meta_LUSC$tobacco_smoking_status[meta_LUSC$tobacco_smoking_status %in% smoker ] <- TRUE
+meta_LUSC$tobacco_smoking_status[meta_LUSC$tobacco_smoking_status %in% no_smoker] <- FALSE
+
+# same for tumor stage, it is already very sparse and then
+# we have sub-groups. Lets try to make just 4 groups instead
+t1 <- c("T1","T1a","T1b")
+t2 <- c("T2","T2a","T2b")
+meta_LUSC$paper_T.stage[meta_LUSC$paper_T.stage %in% t1] <- "T1"
+meta_LUSC$paper_T.stage[meta_LUSC$paper_T.stage %in% t2] <- "T2"
+meta_LUSC$paper_T.stage <- droplevels(meta_LUSC$paper_T.stage)
+# now I have already edge and dont want to install DESEQ2 just for normalization
+# therefore we do simply here a cpm transformation
+# thanks to the above steps, we already have gene names instead of identifiers
+
+LUSC_RNA_cpm <- edgeR::cpm(TCGA_LUSC_mat,prior.count=TRUE,log=TRUE)
+# same here as above, using our own function for double NAs
+meta_LUSC$time <- apply(meta_LUSC[, c("days_to_death", "days_to_last_follow_up")], 1, my.max) / 365
+meta_LUSC$status <- meta_LUSC$vital_status
+meta_LUSC$age <- meta_LUSC$age_at_diagnosis / 365
+clin_LUSC <- meta_LUSC
+#clin_LUSC <- subset(meta_LUSC, !duplicated(submitter_id) & !is.na(time) )
+clin_LUSC <- clin_LUSC[order(clin_LUSC$submitter_id), ]
+clin_LUSC <- as.data.frame(clin_LUSC)
+
+LUSC_RNA_cpm <- LUSC_RNA_cpm[, rownames(clin_LUSC)]
+```
+
+By removing duplicated submitter ID, empty estimation times and unknown
+ages, we reduce the set of patients from originally 562 to 562.
+
+#### Plotting expression
+
+So normally we always normalize, lets do that next.
+
+``` r
+most_var_cpm_subset_ix <- order(rowVars(LUSC_RNA_cpm),decreasing=TRUE)[1:5000]
+most_var_cpm_subset    <- LUSC_RNA_cpm[most_var_cpm_subset_ix,]
+most_var_cpm_pca      <- prcomp(t(most_var_cpm_subset),scale.=TRUE)
+autoplot(most_var_cpm_pca, data=clin_LUSC, color ="treatments") + ggtitle("PCA log2CPM LUSC subset")
+```
+
+![](explore1_files/figure-gfm/unnamed-chunk-28-1.png)<!-- -->
+
+``` r
+autoplot(most_var_cpm_pca, data=clin_LUSC, color ="gender") + ggtitle("PCA log2CPM LUSC subset")
+```
+
+![](explore1_files/figure-gfm/unnamed-chunk-28-2.png)<!-- -->
+
+``` r
+autoplot(most_var_cpm_pca, data=clin_LUSC, color ="ethnicity") + ggtitle("PCA log2CPM LUSC subset")
+```
+
+![](explore1_files/figure-gfm/unnamed-chunk-28-3.png)<!-- -->
+
+``` r
+autoplot(most_var_cpm_pca, data=clin_LUSC, color ="tobacco_smoking_status") + ggtitle("PCA log2CPM LUSC subset")
+```
+
+![](explore1_files/figure-gfm/unnamed-chunk-28-4.png)<!-- -->
+
+``` r
+autoplot(most_var_cpm_pca, data=clin_LUSC, color ="paper_T.stage") + ggtitle("PCA log2CPM LUSC subset")
+```
+
+![](explore1_files/figure-gfm/unnamed-chunk-28-5.png)<!-- -->
+
+There is nothing that clearly separates the 5000 most variable genes in
+the PCA
+
+#### Heatmap
+
+Here we choose again our 2000 most variable genes
+
+``` r
+annot_lung <- HeatmapAnnotation(
+        gender = clin_LUSC$gender,
+        ethnicity=clin_LUSC$ethnicity,
+        vital_status=clin_LUSC$vital_status,
+        treatmens=clin_LUSC$treatments,
+        smoking=clin_LUSC$tobacco_smoking_status,
+        tumor_stage=clin_LUSC$paper_T.stage
+        )
+
+Heatmap(most_var_cpm_subset,
+    name="Lung cancer log2CPM",
+    top_annotation = annot_lung,
+    show_column_names = FALSE,
+    show_row_names = FALSE,
+    show_row_dend = FALSE,
+    border = TRUE,
+    row_km = 6
+)
+```
+
+    ## `use_raster` is automatically set to TRUE for a matrix with more than
+    ## 2000 rows. You can control `use_raster` argument by explicitly setting
+    ## TRUE/FALSE to it.
+    ## 
+    ## Set `ht_opt$message = FALSE` to turn off this message.
+
+    ## 'magick' package is suggested to install to give better rasterization.
+    ## 
+    ## Set `ht_opt$message = FALSE` to turn off this message.
+
+![](explore1_files/figure-gfm/unnamed-chunk-29-1.png)<!-- -->
+
+We can see similarly in the heatmap that none of our annotated values is
+really helping here in the clustering of genes.
+
+#### Nonparametric surival analysis
+
+Lets plot some Kaplan-Maier survival probability curves
+
+``` r
+clin_LUSC$bstatus[clin_LUSC$status == "Dead"] <- 1 
+clin_LUSC$bstatus[clin_LUSC$status == "Alive"] <- 0
+clin_LUSC$bstatus <- as.numeric(clin_LUSC$bstatus)
+LUSC_sfit <- survival::survfit(Surv(time, bstatus) ~ 1, data = clin_LUSC)
+LUSC_sfit
+```
+
+    ## Call: survfit(formula = Surv(time, bstatus) ~ 1, data = clin_LUSC)
+    ## 
+    ##    310 observations deleted due to missingness 
+    ##        n events median 0.95LCL 0.95UCL
+    ## [1,] 252    251   1.49    1.23    1.83
+
+Now we have a fit, maybe important to mention that we have only 306
+observations where the patient survived at all Lets now plot a curve
+
+``` r
+LUSC_ggsurv <- survminer::ggsurvplot(LUSC_sfit,
+  conf.int = TRUE, risk.table = TRUE,
+  xlab = "Time since diagnosis (year)",
+  legend = "none", surv.median.line = "hv"
+)
+
+LUSC_ggsurv$plot <- LUSC_ggsurv$plot + annotate("text", x = 20, y = 0.9, label = "+  Censor")
+LUSC_ggsurv
+```
+
+![](explore1_files/figure-gfm/km_curve1-1.png)<!-- -->
+
+Not a very great outcome, lets compare treatment vs non-treated.
+
+``` r
+LUSC_comp <- survival::survdiff(Surv(time, bstatus) ~ treatments, data = clin_LUSC)
+LUSC_sfit2 <- survival::survfit(Surv(time, bstatus) ~ treatments, data = clin_LUSC)
+LUSC_ggsurv <- survminer::ggsurvplot(LUSC_sfit2,
+  conf.int = TRUE, risk.table = TRUE,
+  xlab = "Time since diagnosis (year)", legend = c(.6, .9),
+  legend.labs = c("No", "Yes"), legend.title = "Treatment",
+  risk.table.y.text.col = TRUE, risk.table.y.text = FALSE, pval=TRUE
+)
+LUSC_ggsurv
+```
+
+![](explore1_files/figure-gfm/unnamed-chunk-31-1.png)<!-- -->
+
+Hmm not looking particularly promising concerning treatment for this
+data-set. The p-value is non-significant, so treatment alone does not
+significantly sway prognosis in this dataset. I tried the same with sex,
+smoke status and tumor stage, but no luck.
+
+Lets have a look with a Cox model if we can identify any factor which
+might actually be interesting here.
+
+``` r
+coxph(Surv(time, bstatus) ~ paper_T.stage + treatments, data = clin_LUSC)
+```
+
+    ## Call:
+    ## coxph(formula = Surv(time, bstatus) ~ paper_T.stage + treatments, 
+    ##     data = clin_LUSC)
+    ## 
+    ##                    coef exp(coef) se(coef)      z       p
+    ## paper_T.stageT2  0.6118    1.8438   0.2711  2.256 0.02404
+    ## paper_T.stageT3  1.2007    3.3224   0.4528  2.652 0.00801
+    ## paper_T.stageT4  0.9998    2.7178   0.5118  1.954 0.05076
+    ## treatmentsTRUE  -0.6538    0.5201   0.2432 -2.688 0.00718
+    ## 
+    ## Likelihood ratio test=14.07  on 4 df, p=0.007065
+    ## n= 90, number of events= 90 
+    ##    (472 observations deleted due to missingness)
+
+We can see here that the tumor stage at which it was detected has strong
+implications on the outcome. Especially if we put them here in the model
+in combination with the treatment. Lets plot again survival curves, but
+now including as well the stage of the tumor
+
+``` r
+LUSC_sfit2 <- survival::survfit(Surv(time, bstatus) ~ treatments + paper_T.stage, data = clin_LUSC)
+LUSC_ggsurv <- survminer::ggsurvplot(LUSC_sfit2,
+  risk.table = TRUE,
+  xlab = "Time since diagnosis (year)",
+  risk.table.y.text.col = TRUE, risk.table.y.text = FALSE, pval=TRUE
+)
+LUSC_ggsurv
+```
+
+![](explore1_files/figure-gfm/unnamed-chunk-33-1.png)<!-- -->
+
+> The Cox model assumes proportional hazards and log-linearity of the
+> covariates. To check the log-linearity for a clinical or demographic
+> variable, e.g. age, we can fit a penalized smoothing spline for age
+> effect
+
+Lets see what that gives . Note: unfortunately, did the provided
+functions not tolerate NA values. I need to re-visit this later again.
+
+### LUAD survival analysis
+
+I added to the typical values as well “\$tobacco_smoking_status” to
+inform us about the most likely source of lung cancer.
+
+``` r
+# we are reusing the followng elements again
+#TCGA_lung_meta
+#combined_mat_cpm
+#rownames(TCGA_lung_meta) <- colnames(combined_mat_cpm)
+
+meta_LUAD <- colData(TCGA_LUAD_data)[,c("project_id", "submitter_id", "age_at_diagnosis", 
+        "ethnicity", "gender", "days_to_death", 
+         "vital_status","treatments","tobacco_smoking_status","paper_T.stage","paper_N.stage")]
+
+
+
+# now we only differentiate if/or not treatment
+meta_LUAD$treatments <- unlist(lapply(meta_LUAD$treatments, function(y) {
+  any(y$treatment_or_therapy == "yes")
+}))
+
+smoker = c("Current Reformed Smoker for < or = 15 yrs","Current Smoker","Current Reformed Smoker, Duration Not Specified")
+no_smoker = c("Lifelong Non-Smoker","Current Reformed Smoker for > 15 yrs")
+
+# same for smoker
+meta_LUAD$tobacco_smoking_status[meta_LUAD$tobacco_smoking_status=="Unknown" | meta_LUAD$tobacco_smoking_status=="Not Reported"] <- NA
+meta_LUAD$tobacco_smoking_status[meta_LUAD$tobacco_smoking_status %in% smoker ] <- TRUE
+meta_LUAD$tobacco_smoking_status[meta_LUAD$tobacco_smoking_status %in% no_smoker] <- FALSE
+
+# same for tumor stage, it is already very sparse and then
+# we have sub-groups. Lets try to make just 4 groups instead
+t1 <- c("T1","T1a","T1b")
+t2 <- c("T2","T2a","T2b")
+meta_LUAD$paper_T.stage[meta_LUAD$paper_T.stage %in% t1] <- "T1"
+meta_LUAD$paper_T.stage[meta_LUAD$paper_T.stage %in% t2] <- "T2"
+meta_LUAD$paper_T.stage <- droplevels(meta_LUAD$paper_T.stage)
+# now I have already edge and dont want to install DESEQ2 just for normalization
+# therefore we do simply here a cpm transformation
+# thanks to the above steps, we already have gene names instead of identifiers
+
+LUAD_RNA_cpm <- edgeR::cpm(TCGA_LUAD_mat,prior.count=TRUE,log=TRUE)
+# same here as above, using our own function for double NAs
+meta_LUAD$time <-meta_LUAD$days_to_death/ 365
+
+meta_LUAD$status <- meta_LUAD$vital_status
+meta_LUAD$age <- meta_LUAD$age_at_diagnosis / 365
+clin_LUAD <- meta_LUAD
+#clin_LUSC <- subset(meta_LUSC, !duplicated(submitter_id) & !is.na(time) )
+clin_LUAD <- clin_LUAD[order(clin_LUAD$submitter_id), ]
+clin_LUAD <- as.data.frame(clin_LUAD)
+
+LUAD_RNA_cpm <- LUAD_RNA_cpm[, rownames(clin_LUAD)]
+```
+
+By removing duplicated submitter ID, empty estimation times and unknown
+ages, we reduce the set of patients from originally 600 to 600.
+
+#### Plotting expression
+
+So normally we always normalize, lets do that next.
+
+``` r
+most_var_cpm_subset_ix <- order(rowVars(LUAD_RNA_cpm),decreasing=TRUE)[1:5000]
+most_var_cpm_subset    <- LUAD_RNA_cpm[most_var_cpm_subset_ix,]
+most_var_cpm_pca      <- prcomp(t(most_var_cpm_subset),scale.=TRUE)
+autoplot(most_var_cpm_pca, data=clin_LUAD, color ="treatments") + ggtitle("PCA log2CPM LUAD subset")
+```
+
+![](explore1_files/figure-gfm/unnamed-chunk-35-1.png)<!-- -->
+
+``` r
+autoplot(most_var_cpm_pca, data=clin_LUAD, color ="gender") + ggtitle("PCA log2CPM LUAD subset")
+```
+
+![](explore1_files/figure-gfm/unnamed-chunk-35-2.png)<!-- -->
+
+``` r
+autoplot(most_var_cpm_pca, data=clin_LUAD, color ="ethnicity") + ggtitle("PCA log2CPM LUAD subset")
+```
+
+![](explore1_files/figure-gfm/unnamed-chunk-35-3.png)<!-- -->
+
+``` r
+autoplot(most_var_cpm_pca, data=clin_LUAD, color ="tobacco_smoking_status") + ggtitle("PCA log2CPM LUAD subset")
+```
+
+![](explore1_files/figure-gfm/unnamed-chunk-35-4.png)<!-- -->
+
+``` r
+autoplot(most_var_cpm_pca, data=clin_LUAD, color ="paper_T.stage") + ggtitle("PCA log2CPM LUAD subset")
+```
+
+![](explore1_files/figure-gfm/unnamed-chunk-35-5.png)<!-- -->
+
+There is nothing that clearly separates the 5000 most variable genes in
+the PCA
+
+#### Heatmap
+
+Here we choose again our 2000 most variable genes
+
+``` r
+annot_lung <- HeatmapAnnotation(
+        gender = clin_LUAD$gender,
+        ethnicity=clin_LUAD$ethnicity,
+        vital_status=clin_LUAD$vital_status,
+        treatmens=clin_LUAD$treatments,
+        smoking=clin_LUAD$tobacco_smoking_status,
+        tumor_stage=clin_LUAD$paper_T.stage,
+        M_stage=clin_LUAD$paper_M.stage,
+        N_stage=clin_LUAD$paper_N.stage)
+
+Heatmap(most_var_cpm_subset,
+    name="Lung cancer log2CPM",
+    top_annotation = annot_lung,
+    show_column_names = FALSE,
+    show_row_names = FALSE,
+    show_row_dend = FALSE,
+    border = TRUE,
+    row_km = 6
+)
+```
+
+    ## `use_raster` is automatically set to TRUE for a matrix with more than
+    ## 2000 rows. You can control `use_raster` argument by explicitly setting
+    ## TRUE/FALSE to it.
+    ## 
+    ## Set `ht_opt$message = FALSE` to turn off this message.
+
+    ## 'magick' package is suggested to install to give better rasterization.
+    ## 
+    ## Set `ht_opt$message = FALSE` to turn off this message.
+
+![](explore1_files/figure-gfm/unnamed-chunk-36-1.png)<!-- -->
+
+We can see similarly in the heatmap that none of our annotated values is
+really helping here in the clustering of genes, neither.
+
+#### Nonparametric surival analysis
+
+Lets plot some Kaplan-Maier survival probability curves
+
+``` r
+clin_LUAD$bstatus[clin_LUAD$status == "Dead"] <- 1 
+clin_LUAD$bstatus[clin_LUAD$status == "Alive"] <- 0
+clin_LUAD$bstatus <- as.numeric(clin_LUAD$bstatus)
+LUAD_sfit <- survival::survfit(Surv(time, bstatus) ~ 1, data = clin_LUAD)
+LUAD_sfit
+```
+
+    ## Call: survfit(formula = Surv(time, bstatus) ~ 1, data = clin_LUAD)
+    ## 
+    ##    385 observations deleted due to missingness 
+    ##        n events median 0.95LCL 0.95UCL
+    ## [1,] 215    215   1.71    1.37    2.02
+
+Now we have a fit, maybe important to mention that we have only 381
+observations where the patient survived at all Lets now plot a curve
+
+``` r
+LUAD_ggsurv <- survminer::ggsurvplot(LUAD_sfit,
+  conf.int = TRUE, risk.table = TRUE,
+  xlab = "Time since diagnosis (year)",
+  legend = "none", surv.median.line = "hv"
+)
+
+LUAD_ggsurv$plot <- LUAD_ggsurv$plot + annotate("text", x = 20, y = 0.9, label = "+  Censor")
+LUAD_ggsurv
+```
+
+![](explore1_files/figure-gfm/km_curve-1.png)<!-- -->
+
+Not a very great outcome, lets compare treatment vs non-treated.
+
+``` r
+LUAD_comp <- survival::survdiff(Surv(time, bstatus) ~ treatments, data = clin_LUAD)
+LUAD_sfit2 <- survival::survfit(Surv(time, bstatus) ~ treatments, data = clin_LUAD)
+LUAD_ggsurv <- survminer::ggsurvplot(LUAD_sfit2,
+  conf.int = TRUE, risk.table = TRUE,
+  xlab = "Time since diagnosis (year)", legend = c(.6, .9),
+  legend.labs = c("No", "Yes"), legend.title = "Treatment",
+  risk.table.y.text.col = TRUE, risk.table.y.text = FALSE, pval=TRUE
+)
+
+LUAD_ggsurv
+```
+
+![](explore1_files/figure-gfm/surv_plot_LUAD1-1.png)<!-- -->
+
+Same game now as above for the LUSC, lets see if we can find factors
+which would help to discriminate something.
+
+``` r
+coxph(Surv(time, bstatus) ~ paper_N.stage, data = clin_LUAD)
+```
+
+    ## Call:
+    ## coxph(formula = Surv(time, bstatus) ~ paper_N.stage, data = clin_LUAD)
+    ## 
+    ##                                coef exp(coef) se(coef)     z       p
+    ## paper_N.stageN1              0.3991    1.4905   0.2506 1.592 0.11130
+    ## paper_N.stageN2              0.7174    2.0491   0.2709 2.648 0.00809
+    ## paper_N.stageN3                  NA        NA   0.0000    NA      NA
+    ## paper_N.stage[Not Available]     NA        NA   0.0000    NA      NA
+    ## paper_N.stageNX              0.7582    2.1344   0.7328 1.035 0.30088
+    ## 
+    ## Likelihood ratio test=7.45  on 3 df, p=0.05882
+    ## n= 95, number of events= 95 
+    ##    (505 observations deleted due to missingness)
+
+I found one element, which seems interesting which is the N-stage from
+the paper. This is the extend of nearby affected lymph nodes.
+
+``` r
+LUAD_sfit2 <- survival::survfit(Surv(time, bstatus) ~ paper_N.stage, data = clin_LUAD)
+LUAD_ggsurv <- survminer::ggsurvplot(LUAD_sfit2,
+  risk.table = TRUE,
+  xlab = "Time since diagnosis (year)",
+  risk.table.y.text.col = TRUE, risk.table.y.text = FALSE, pval=TRUE
+)
+LUAD_ggsurv
+```
+
+![](explore1_files/figure-gfm/surv_plot_LUAD2-1.png)<!-- -->
+
+Here we can see quite nicely how the different grades of lymph node
+invasion influence the outcome.

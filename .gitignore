@@ -1,3 +1,5 @@
 GDCdata/
 data/
 *.html
+*.maf
+*.gz
